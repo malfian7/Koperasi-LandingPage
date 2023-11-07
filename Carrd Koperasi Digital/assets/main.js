@@ -504,7 +504,7 @@
 							if (client.flags.lsdUnits) {
 		
 								document.documentElement.style.setProperty('--viewport-height', '100svh');
-								document.documentElement.style.setProperty('--background-height', '100dvh');
+								document.documentElement.style.setProperty('--background-height', '100lvh');
 		
 							}
 		
@@ -626,7 +626,8 @@
 					triggerElement: (('triggerElement' in o && o.triggerElement) ? o.triggerElement : o.element),
 					enter: ('enter' in o ? o.enter : null),
 					leave: ('leave' in o ? o.leave : null),
-					mode: ('mode' in o ? o.mode : 3),
+					mode: ('mode' in o ? o.mode : 4),
+					threshold: ('threshold' in o ? o.threshold : 0.25),
 					offset: ('offset' in o ? o.offset : 0),
 					initialState: ('initialState' in o ? o.initialState : null),
 					state: false,
@@ -662,7 +663,8 @@
 				// Step through items.
 					scrollEvents.items.forEach(function(item) {
 		
-						var bcr, elementTop, elementBottom, state, a, b;
+						var	elementTop, elementBottom, viewportTop, viewportBottom,
+							bcr, pad, state, a, b;
 		
 						// No enter/leave handlers? Bail.
 							if (!item.enter
@@ -744,19 +746,55 @@
 											case 3:
 		
 												// Upper limit (25%-).
-													a = top + (height * 0.25);
+													a = top + (height * (item.threshold));
 		
 													if (a - (height * 0.375) <= 0)
 														a = 0;
 		
 												// Lower limit (-75%).
-													b = top + (height * 0.75);
+													b = top + (height * (1 - item.threshold));
 		
 													if (b + (height * 0.375) >= document.body.scrollHeight - scrollPad)
 														b = document.body.scrollHeight + scrollPad;
 		
 												// State.
 													state = (b > (elementTop - item.offset) && a < (elementBottom + item.offset));
+		
+												break;
+		
+										// Viewport intersects with element.
+											case 4:
+		
+												// Calculate pad, viewport top, viewport bottom.
+													pad = height * item.threshold;
+													viewportTop = (top + pad);
+													viewportBottom = (bottom - pad);
+		
+												// Compensate for elements at the very top or bottom of the page.
+													if (Math.floor(top) <= pad)
+														viewportTop = top;
+		
+													if (Math.ceil(bottom) >= (document.body.scrollHeight - pad))
+														viewportBottom = bottom;
+		
+												// Element is smaller than viewport?
+													if ((viewportBottom - viewportTop) >= (elementBottom - elementTop)) {
+		
+														state =	(
+																(elementTop >= viewportTop && elementBottom <= viewportBottom)
+															||	(elementTop >= viewportTop && elementTop <= viewportBottom)
+															||	(elementBottom >= viewportTop && elementBottom <= viewportBottom)
+														);
+		
+													}
+		
+												// Otherwise, viewport is smaller than element.
+													else
+														state =	(
+																(viewportTop >= elementTop && viewportBottom <= elementBottom)
+															||	(elementTop >= viewportTop && elementTop <= viewportBottom)
+															||	(elementBottom >= viewportTop && elementBottom <= viewportBottom)
+														);
 		
 												break;
 		
@@ -1211,26 +1249,72 @@
 			},
 		
 			/**
+			 * Regex.
+			 * @var {RegExp}
+			 */
+			regex: new RegExp('([a-zA-Z0-9\.\,\-\_\"\'\?\!\:\;\#\@\#$\%\&\(\)\{\}]+)', 'g'),
+		
+			/**
 			 * Adds one or more animatable elements.
 			 * @param {string} selector Selector.
 			 * @param {object} settings Settings.
 			 */
 			add: function(selector, settings) {
 		
-				var style = settings.style in this.effects ? settings.style : 'fade',
+				var	_this = this,
+					style = settings.style in this.effects ? settings.style : 'fade',
 					speed = parseInt('speed' in settings ? settings.speed : 1000) / 1000,
 					intensity = ((parseInt('intensity' in settings ? settings.intensity : 5) / 10) * 1.75) + 0.25,
 					delay = parseInt('delay' in settings ? settings.delay : 0) / 1000,
 					replay = 'replay' in settings ? settings.replay : false,
-					stagger = 'stagger' in settings ? (parseInt(settings.stagger) > -125 ? (parseInt(settings.stagger) / 1000) : false) : false,
+					stagger = 'stagger' in settings ? (parseInt(settings.stagger) >= 0 ? (parseInt(settings.stagger) / 1000) : false) : false,
 					staggerOrder = 'staggerOrder' in settings ? settings.staggerOrder : 'default',
+					staggerSelector = 'staggerSelector' in settings ? settings.staggerSelector : null,
+					threshold = parseInt('threshold' in settings ? settings.threshold : 3),
 					state = 'state' in settings ? settings.state : null,
-					effect = this.effects[style];
+					effect = this.effects[style],
+					scrollEventThreshold;
+		
+				// Determine scroll event threshold.
+					switch (threshold) {
+		
+						case 1:
+							scrollEventThreshold = 0;
+							break;
+		
+						case 2:
+							scrollEventThreshold = 0.125;
+							break;
+		
+						default:
+						case 3:
+							scrollEventThreshold = 0.25;
+							break;
+		
+						case 4:
+							scrollEventThreshold = 0.375;
+							break;
+		
+						case 5:
+							scrollEventThreshold = 0.475;
+							break;
+		
+					}
 		
 				// Step through selected elements.
 					$$(selector).forEach(function(e) {
 		
-						var children = (stagger !== false) ? e.querySelectorAll(':scope > li, :scope ul > li') : null,
+						var children, enter, leave, targetElement, triggerElement;
+		
+						// Stagger in use, and stagger selector is "all children"? Expand text nodes.
+							if (stagger !== false
+							&&	staggerSelector == ':scope > *')
+								_this.expandTextNodes(e);
+		
+						// Get children.
+							children = (stagger !== false && staggerSelector) ? e.querySelectorAll(staggerSelector) : null;
+		
+						// Define handlers.
 							enter = function(staggerDelay=0) {
 		
 								var _this = this,
@@ -1273,7 +1357,8 @@
 		
 										}, (speed + delay + staggerDelay) * 1000 * 2);
 		
-							},
+							};
+		
 							leave = function() {
 		
 								var _this = this,
@@ -1316,8 +1401,7 @@
 		
 										}, speed * 1000 * 2);
 		
-							},
-							targetElement, triggerElement;
+							};
 		
 						// Initial rewind.
 		
@@ -1363,6 +1447,7 @@
 								element: e,
 								triggerElement: triggerElement,
 								initialState: state,
+								threshold: scrollEventThreshold,
 								enter: children ? function() {
 		
 									var staggerDelay = 0,
@@ -1433,40 +1518,94 @@
 		
 					});
 		
-				},
+			},
+		
+			/**
+			 * Expand text nodes within an element into <text-node> elements.
+			 * @param {DOMElement} e Element.
+			 */
+			expandTextNodes: function(e) {
+		
+				var s, i, w, x;
+		
+				// Step through child nodes.
+					for (i = 0; i < e.childNodes.length; i++) {
+		
+						// Get child node.
+							x = e.childNodes[i];
+		
+						// Not a text node? Skip.
+							if (x.nodeType != Node.TEXT_NODE)
+								continue;
+		
+						// Get node value.
+							s = x.nodeValue;
+		
+						// Convert to <text-node>.
+							s = s.replace(
+								this.regex,
+								function(x, a) {
+									return '<text-node>' + a + '</text-node>';
+								}
+							);
+		
+						// Update.
+		
+							// Create wrapper.
+								w = document.createElement('text-node');
+		
+							// Populate with processed text.
+							// This converts our processed text into a series of new text and element nodes.
+								w.innerHTML = s;
+		
+							// Replace original element with wrapper.
+								x.replaceWith(w);
+		
+							// Step through wrapper's children.
+								while (w.childNodes.length > 0) {
+		
+									// Move child after wrapper.
+										w.parentNode.insertBefore(
+											w.childNodes[0],
+											w
+										);
+		
+								}
+		
+							// Remove wrapper (now that it's no longer needed).
+								w.parentNode.removeChild(w);
+		
+						}
+		
+			},
 		
 		};
 	
 	// Initialize "On Visible" animations.
-		onvisible.add('h1.style1, h2.style1, h3.style1, p.style1', { style: 'fade-up', speed: 1500, intensity: 5, delay: 250, staggerOrder: '', replay: false });
-		onvisible.add('h1.style2, h2.style2, h3.style2, p.style2', { style: 'fade-up', speed: 1500, intensity: 5, delay: 750, staggerOrder: '', replay: false });
-		onvisible.add('#image02', { style: 'fade-down', speed: 1625, intensity: 5, delay: 875, staggerOrder: '', replay: false });
-		onvisible.add('h1.style3, h2.style3, h3.style3, p.style3', { style: 'fade-right', speed: 1500, intensity: 5, delay: 250, staggerOrder: '', replay: false });
-		onvisible.add('h1.style4, h2.style4, h3.style4, p.style4', { style: 'fade-right', speed: 1500, intensity: 5, delay: 500, staggerOrder: '', replay: false });
-		onvisible.add('h1.style5, h2.style5, h3.style5, p.style5', { style: 'fade-right', speed: 1500, intensity: 5, delay: 875, staggerOrder: '', replay: false });
-		onvisible.add('#list01', { style: 'fade-left', speed: 1500, intensity: 5, delay: 500, stagger: 250, replay: false });
-		onvisible.add('h1.style6, h2.style6, h3.style6, p.style6', { style: 'fade-down', speed: 1500, intensity: 5, delay: 375, staggerOrder: '', replay: false });
-		onvisible.add('h1.style7, h2.style7, h3.style7, p.style7', { style: 'fade-down', speed: 1500, intensity: 5, delay: 625, staggerOrder: '', replay: false });
-		onvisible.add('h1.style9, h2.style9, h3.style9, p.style9', { style: 'fade-down', speed: 1500, intensity: 5, delay: 500, staggerOrder: '', replay: false });
-		onvisible.add('h1.style8, h2.style8, h3.style8, p.style8', { style: 'fade-down', speed: 1500, intensity: 5, delay: 250, staggerOrder: '', replay: false });
-		onvisible.add('h1.style10, h2.style10, h3.style10, p.style10', { style: 'fade-right', speed: 1500, intensity: 5, delay: 250, staggerOrder: '', replay: false });
-		onvisible.add('#list03', { style: 'fade-right', speed: 1500, intensity: 5, delay: 625, stagger: 625, replay: false });
-		onvisible.add('#image05', { style: 'fade-left', speed: 1500, intensity: 5, delay: 125, staggerOrder: '', replay: false });
-		onvisible.add('h1.style11, h2.style11, h3.style11, p.style11', { style: 'fade-right', speed: 1500, intensity: 5, delay: 500, staggerOrder: '', replay: false });
-		onvisible.add('#list04', { style: 'fade-right', speed: 1500, intensity: 5, delay: 750, stagger: 500, replay: false });
-		onvisible.add('#image06', { style: 'fade-left', speed: 1500, intensity: 5, delay: 0, staggerOrder: '', replay: false });
-		onvisible.add('#image07', { style: 'fade-right', speed: 1500, intensity: 5, delay: 125, staggerOrder: '', replay: false });
-		onvisible.add('#list05', { style: 'fade-left', speed: 1500, intensity: 5, delay: 500, stagger: 625, replay: false });
-		onvisible.add('#image04', { style: 'fade-right', speed: 1500, intensity: 5, delay: 375, staggerOrder: '', replay: false });
-		onvisible.add('#list02', { style: 'fade-left', speed: 1500, intensity: 5, delay: 375, stagger: 625, replay: false });
-		onvisible.add('#list06', { style: 'fade-left', speed: 1500, intensity: 5, delay: 375, stagger: 625, replay: false });
-		onvisible.add('#image11', { style: 'fade-right', speed: 1500, intensity: 5, delay: 375, staggerOrder: '', replay: false });
-		onvisible.add('#image08', { style: 'fade-right', speed: 1500, intensity: 5, delay: 375, staggerOrder: '', replay: false });
-		onvisible.add('#image10', { style: 'fade-right', speed: 1500, intensity: 5, delay: 375, staggerOrder: '', replay: false });
-		onvisible.add('#image09', { style: 'fade-right', speed: 1500, intensity: 5, delay: 375, staggerOrder: '', replay: false });
-		onvisible.add('h1.style14, h2.style14, h3.style14, p.style14', { style: 'fade-down', speed: 1500, intensity: 5, delay: 375, staggerOrder: '', replay: false });
-		onvisible.add('h1.style15, h2.style15, h3.style15, p.style15', { style: 'fade-down', speed: 1500, intensity: 5, delay: 625, staggerOrder: '', replay: false });
-		onvisible.add('h1.style16, h2.style16, h3.style16, p.style16', { style: 'fade-down', speed: 1500, intensity: 5, delay: 875, staggerOrder: '', replay: false });
-		onvisible.add('#image13', { style: 'fade-right', speed: 1500, intensity: 5, delay: 375, staggerOrder: '', replay: false });
+		onvisible.add('h1.style1, h2.style1, h3.style1, p.style1', { style: 'fade-up', speed: 1500, intensity: 5, threshold: 3, delay: 250, replay: false });
+		onvisible.add('h1.style2, h2.style2, h3.style2, p.style2', { style: 'fade-up', speed: 1500, intensity: 5, threshold: 3, delay: 750, replay: false });
+		onvisible.add('#image02', { style: 'fade-down', speed: 1625, intensity: 5, threshold: 3, delay: 875, replay: false });
+		onvisible.add('h1.style3, h2.style3, h3.style3, p.style3', { style: 'fade-right', speed: 1500, intensity: 5, threshold: 3, delay: 250, replay: false });
+		onvisible.add('h1.style4, h2.style4, h3.style4, p.style4', { style: 'fade-right', speed: 1500, intensity: 5, threshold: 3, delay: 500, replay: false });
+		onvisible.add('h1.style5, h2.style5, h3.style5, p.style5', { style: 'fade-right', speed: 1500, intensity: 5, threshold: 3, delay: 875, replay: false });
+		onvisible.add('#list01', { style: 'fade-left', speed: 1500, intensity: 5, threshold: 3, delay: 500, stagger: 250, staggerSelector: ':scope ul > li, :scope ol > li', replay: false });
+		onvisible.add('h1.style6, h2.style6, h3.style6, p.style6', { style: 'fade-down', speed: 1500, intensity: 5, threshold: 3, delay: 375, replay: false });
+		onvisible.add('h1.style7, h2.style7, h3.style7, p.style7', { style: 'fade-down', speed: 1500, intensity: 5, threshold: 3, delay: 625, replay: false });
+		onvisible.add('h1.style9, h2.style9, h3.style9, p.style9', { style: 'fade-down', speed: 1500, intensity: 5, threshold: 3, delay: 500, replay: false });
+		onvisible.add('h1.style8, h2.style8, h3.style8, p.style8', { style: 'fade-down', speed: 1500, intensity: 5, threshold: 3, delay: 250, replay: false });
+		onvisible.add('h1.style10, h2.style10, h3.style10, p.style10', { style: 'fade-right', speed: 1500, intensity: 5, threshold: 3, delay: 250, replay: false });
+		onvisible.add('#list03', { style: 'fade-right', speed: 1500, intensity: 5, threshold: 3, delay: 625, stagger: 625, staggerSelector: ':scope ul > li, :scope ol > li', replay: false });
+		onvisible.add('#image05', { style: 'fade-left', speed: 1500, intensity: 5, threshold: 3, delay: 125, replay: false });
+		onvisible.add('h1.style11, h2.style11, h3.style11, p.style11', { style: 'fade-right', speed: 1500, intensity: 5, threshold: 3, delay: 500, replay: false });
+		onvisible.add('#list04', { style: 'fade-right', speed: 1500, intensity: 5, threshold: 3, delay: 750, stagger: 500, staggerSelector: ':scope ul > li, :scope ol > li', replay: false });
+		onvisible.add('#image06', { style: 'fade-left', speed: 1500, intensity: 5, threshold: 3, delay: 0, replay: false });
+		onvisible.add('#image07', { style: 'fade-right', speed: 1500, intensity: 5, threshold: 3, delay: 125, replay: false });
+		onvisible.add('#list05', { style: 'fade-left', speed: 1500, intensity: 5, threshold: 3, delay: 500, stagger: 625, staggerSelector: ':scope ul > li, :scope ol > li', replay: false });
+		onvisible.add('#image04', { style: 'fade-right', speed: 1500, intensity: 5, threshold: 3, delay: 375, replay: false });
+		onvisible.add('#list02', { style: 'fade-left', speed: 1500, intensity: 5, threshold: 3, delay: 375, stagger: 625, staggerSelector: ':scope ul > li, :scope ol > li', replay: false });
+		onvisible.add('#list06', { style: 'fade-left', speed: 1500, intensity: 5, threshold: 3, delay: 375, stagger: 625, staggerSelector: ':scope ul > li, :scope ol > li', replay: false });
+		onvisible.add('h1.style14, h2.style14, h3.style14, p.style14', { style: 'fade-down', speed: 1500, intensity: 5, threshold: 3, delay: 375, replay: false });
+		onvisible.add('h1.style15, h2.style15, h3.style15, p.style15', { style: 'fade-down', speed: 1500, intensity: 5, threshold: 3, delay: 625, replay: false });
+		onvisible.add('h1.style16, h2.style16, h3.style16, p.style16', { style: 'fade-down', speed: 1500, intensity: 5, threshold: 3, delay: 875, replay: false });
 
 })();
